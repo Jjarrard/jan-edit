@@ -1,0 +1,92 @@
+import pytest
+
+from janedit import files
+
+
+@pytest.fixture
+def project(tmp_path):
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "app.py").write_text(
+        "def add(a, b):\n"
+        "    return a - b\n"
+        "\n"
+        "def main():\n"
+        "    print(add(1, 2))\n"
+    )
+    return tmp_path
+
+
+def test_resolve_blocks_path_traversal(project):
+    with pytest.raises(files.PathError):
+        files.resolve(project, "../outside.py")
+
+
+def test_resolve_blocks_absolute_escape(project):
+    with pytest.raises(files.PathError):
+        files.resolve(project, "/etc/passwd")
+
+
+def test_read_lines_numbers_output(project):
+    out = files.read_lines(project, "src/app.py", 1, 2)
+    assert "1: def add(a, b):" in out
+    assert "2:     return a - b" in out
+
+
+def test_read_lines_missing_file(project):
+    with pytest.raises(files.PathError):
+        files.read_lines(project, "src/nope.py")
+
+
+def test_list_tree_ignores_dotdirs(project):
+    (project / ".git").mkdir()
+    (project / ".git" / "HEAD").write_text("ref")
+    out = files.list_tree(project)
+    assert ".git" not in out
+    assert "src/" in out
+    assert "src/app.py" in out
+
+
+def test_grep_finds_match(project):
+    out = files.grep(project, "return a - b")
+    assert "app.py:2" in out
+
+
+def test_grep_no_match(project):
+    out = files.grep(project, "nonexistent_symbol_xyz")
+    assert "no matches" in out
+
+
+def test_plan_replace_fixes_the_bug(project):
+    result = files.plan_replace(project, "src/app.py", 2, 2, "    return a + b")
+    assert "    return a + b" in result.new_text
+    assert "-    return a - b" in result.diff
+    assert "+    return a + b" in result.diff
+    # file on disk is untouched until files.write() is called
+    assert "a - b" in (project / "src" / "app.py").read_text()
+
+
+def test_plan_replace_out_of_bounds(project):
+    with pytest.raises(files.PathError):
+        files.plan_replace(project, "src/app.py", 50, 51, "x")
+
+
+def test_plan_insert_at_top(project):
+    result = files.plan_insert(project, "src/app.py", 0, "import sys")
+    assert result.new_text.startswith("import sys\ndef add")
+
+
+def test_plan_insert_new_file(project):
+    result = files.plan_insert(project, "src/new.py", 0, "x = 1")
+    assert result.is_new_file
+    assert result.new_text == "x = 1\n"
+
+
+def test_plan_delete_range(project):
+    result = files.plan_delete(project, "src/app.py", 3, 3)
+    assert result.new_text.count("\n") == 4  # one blank line removed
+
+
+def test_write_then_read_roundtrip(project):
+    result = files.plan_replace(project, "src/app.py", 2, 2, "    return a + b")
+    files.write(project, result.rel, result.new_text)
+    assert "a + b" in (project / "src" / "app.py").read_text()
