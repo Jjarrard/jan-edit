@@ -111,6 +111,9 @@ rewrites.
 | `/reset`               | clear chat history (keeps todos and files)        |
 | `/help`, `/quit`       |                                                   |
 
+Not using Jan? See [docs/custom-api.md](docs/custom-api.md) for pointing
+janedit at another OpenAI-compatible API.
+
 ## Flags
 
 `--project` `--model` `--fast-model` `--auto-fast` `--base-url` `--max-tokens`
