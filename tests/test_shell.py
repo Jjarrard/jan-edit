@@ -41,6 +41,69 @@ def test_mutating_commands_need_approval(command):
     assert shell.classify(command).verdict == shell.NEEDS_APPROVAL, command
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git reset --hard HEAD~1",
+        "git clean -fdx",
+        "git clean --force",
+        "docker system prune -f",
+        "docker rm -f mycontainer",
+        "kubectl delete pods --all",
+        "kubectl delete namespace --all-namespaces",
+    ],
+)
+def test_newly_blocked_destructive_commands(command):
+    assert shell.classify(command).verdict == shell.BLOCKED, command
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["docker ps", "docker images", "docker logs mycontainer", "kubectl get pods", "kubectl describe pod x"],
+)
+def test_docker_and_kubectl_read_only_subcommands_are_safe(command):
+    assert shell.classify(command).verdict == shell.SAFE, command
+
+
+@pytest.mark.parametrize("command", ["docker build .", "kubectl apply -f x.yaml", "docker exec -it x bash"])
+def test_docker_and_kubectl_mutating_subcommands_need_approval(command):
+    assert shell.classify(command).verdict == shell.NEEDS_APPROVAL, command
+
+
+def test_project_deny_list_escalates_an_otherwise_safe_program(tmp_path):
+    (tmp_path / ".janedit").mkdir()
+    (tmp_path / ".janedit" / "command_rules.json").write_text('{"deny_programs": ["cat"]}')
+    assert shell.classify("cat secret.txt", root=tmp_path).verdict == shell.NEEDS_APPROVAL
+
+
+def test_project_allow_list_marks_an_unknown_program_safe(tmp_path):
+    (tmp_path / ".janedit").mkdir()
+    (tmp_path / ".janedit" / "command_rules.json").write_text('{"allow_programs": ["mytool"]}')
+    assert shell.classify("mytool --check", root=tmp_path).verdict == shell.SAFE
+
+
+def test_project_allow_subcommands(tmp_path):
+    (tmp_path / ".janedit").mkdir()
+    (tmp_path / ".janedit" / "command_rules.json").write_text('{"allow_subcommands": {"docker": ["build"]}}')
+    assert shell.classify("docker build .", root=tmp_path).verdict == shell.SAFE
+
+
+def test_project_allow_list_cannot_override_hard_blocks(tmp_path):
+    (tmp_path / ".janedit").mkdir()
+    (tmp_path / ".janedit" / "command_rules.json").write_text('{"allow_programs": ["rm"]}')
+    assert shell.classify("rm -rf /", root=tmp_path).verdict == shell.BLOCKED
+
+
+def test_malformed_command_rules_file_is_ignored(tmp_path):
+    (tmp_path / ".janedit").mkdir()
+    (tmp_path / ".janedit" / "command_rules.json").write_text("not json{{{")
+    assert shell.classify("ls", root=tmp_path).verdict == shell.SAFE
+
+
+def test_missing_command_rules_file_is_fine(tmp_path):
+    assert shell.classify("ls", root=tmp_path).verdict == shell.SAFE
+
+
 def test_chaining_downgrades_a_safe_prefix_to_approval():
     # "ls" alone is safe, but a chained command must not inherit that
     assert shell.classify("ls && rm file").verdict != shell.SAFE

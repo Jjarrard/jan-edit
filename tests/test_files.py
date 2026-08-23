@@ -90,3 +90,86 @@ def test_write_then_read_roundtrip(project):
     result = files.plan_replace(project, "src/app.py", 2, 2, "    return a + b")
     files.write(project, result.rel, result.new_text)
     assert "a + b" in (project / "src" / "app.py").read_text()
+
+
+def test_write_no_leftover_temp_files(project):
+    result = files.plan_replace(project, "src/app.py", 2, 2, "    return a + b")
+    files.write(project, result.rel, result.new_text)
+    leftovers = [p for p in (project / "src").iterdir() if p.name != "app.py"]
+    assert leftovers == []
+
+
+def test_write_creates_parent_dirs(project):
+    files.write(project, "new/nested/file.py", "x = 1\n")
+    assert (project / "new" / "nested" / "file.py").read_text() == "x = 1\n"
+
+
+def test_write_replaces_existing_content_atomically(project):
+    path = project / "src" / "app.py"
+    before = path.read_text()
+    files.write(project, "src/app.py", "totally new content\n")
+    after = path.read_text()
+    assert after == "totally new content\n"
+    assert after != before
+
+
+def test_plan_replace_on_single_line_file(tmp_path):
+    (tmp_path / "one.py").write_text("x = 1\n")
+    result = files.plan_replace(tmp_path, "one.py", 1, 1, "x = 2")
+    assert result.new_text == "x = 2\n"
+
+
+def test_plan_replace_no_trailing_newline_in_source(tmp_path):
+    (tmp_path / "no_nl.py").write_text("x = 1")
+    result = files.plan_replace(tmp_path, "no_nl.py", 1, 1, "x = 2")
+    assert result.new_text == "x = 2\n"
+
+
+def test_plan_insert_into_empty_file(tmp_path):
+    (tmp_path / "empty.py").write_text("")
+    result = files.plan_insert(tmp_path, "empty.py", 0, "x = 1")
+    assert result.new_text == "x = 1\n"
+    assert not result.is_new_file
+
+
+def test_plan_insert_at_end_of_file(project):
+    n = len((project / "src" / "app.py").read_text().splitlines())
+    result = files.plan_insert(project, "src/app.py", n, "# trailing comment")
+    assert result.new_text.rstrip("\n").endswith("# trailing comment")
+
+
+def test_plan_insert_out_of_bounds(project):
+    with pytest.raises(files.PathError):
+        files.plan_insert(project, "src/app.py", 999, "x")
+
+
+def test_plan_insert_negative_line_out_of_bounds(project):
+    with pytest.raises(files.PathError):
+        files.plan_insert(project, "src/app.py", -1, "x")
+
+
+def test_plan_delete_out_of_bounds(project):
+    with pytest.raises(files.PathError):
+        files.plan_delete(project, "src/app.py", 1, 999)
+
+
+def test_plan_delete_entire_file_leaves_it_empty(tmp_path):
+    (tmp_path / "f.py").write_text("a\nb\nc\n")
+    result = files.plan_delete(tmp_path, "f.py", 1, 3)
+    assert result.new_text == ""
+
+
+def test_plan_delete_end_before_start_is_out_of_bounds(project):
+    with pytest.raises(files.PathError):
+        files.plan_delete(project, "src/app.py", 3, 2)
+
+
+def test_plan_replace_missing_file(project):
+    with pytest.raises(files.PathError):
+        files.plan_replace(project, "src/nope.py", 1, 1, "x")
+
+
+def test_plan_delete_missing_file(project):
+    with pytest.raises(files.PathError):
+        files.plan_delete(project, "src/nope.py", 1, 1)
+
