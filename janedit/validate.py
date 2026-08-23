@@ -73,10 +73,12 @@ def _validate_ini(text: str) -> ValidationResult:
 
 def _validate_toml(text: str) -> ValidationResult:
     if tomllib is None:
-        # No TOML parser available (Python 3.10 without `tomli` installed) -
-        # fall back to the conservative INI-ish smoke test rather than
-        # skipping validation entirely.
-        return _validate_ini(text)
+        # No TOML parser available (Python 3.10 without `tomli` installed).
+        # TOML and INI are similar but not compatible - inline tables, arrays
+        # of tables, and multi-line strings are all valid TOML that
+        # `configparser` would misreport as broken - so best-effort here
+        # means skipping validation, not running an incompatible parser.
+        return ValidationResult.good()
     try:
         tomllib.loads(text)
     except tomllib.TOMLDecodeError as exc:
