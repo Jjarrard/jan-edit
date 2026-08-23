@@ -54,6 +54,31 @@ def test_chat_turn_failure_leaves_empty_history_untouched(tmp_path):
     assert session.history == []
 
 
+def test_validation_failure_increments_counter_and_leaves_file_untouched(tmp_path):
+    (tmp_path / "bad.py").write_text("def f():\n    return 1\n")
+    agent, session = _agent(tmp_path)
+    action = parse_action("EDIT bad.py 2-2\n```\n    return (\n```\n")
+
+    result_text, finished = agent._handle_action(action, None)
+
+    assert finished is False
+    assert "would leave" in result_text
+    assert agent.validation_failures == 1
+    assert agent.edits_applied == 0
+    assert (tmp_path / "bad.py").read_text() == "def f():\n    return 1\n"
+
+
+def test_applied_edit_increments_edits_applied_counter(tmp_path):
+    (tmp_path / "ok.py").write_text("x = 1\n")
+    agent, session = _agent(tmp_path)
+    action = parse_action("EDIT ok.py 1-1\n```\nx = 2\n```\n")
+
+    agent._handle_action(action, None)
+
+    assert agent.edits_applied == 1
+    assert agent.validation_failures == 0
+
+
 class ScriptedClient:
     model = "fake"
 

@@ -11,8 +11,11 @@ the harness has to be the thing that's correct**.
 
 ## Run it
 
-should be in zsh scripts or whatever
+```bash
 janedit --project ~/Desktop/code/testing-jan2
+```
+
+Or via the wrapper script:
 
 ```bash
 ./janedit-run --project /path/to/your/code
@@ -48,9 +51,16 @@ The interesting part isn't the command grammar, it's the set of things a bad
 model **cannot** do:
 
 - **Can't land broken code.** Every edit is parsed and validated _before_ it
-  touches disk — Python via `ast`, JSON via `json`, braces for C-family
-  languages. A syntactically broken edit is rejected with the specific error
-  and the file is left untouched. See [`validate.py`](janedit/validate.py).
+  touches disk — Python via `ast`, JSON via `json`, TOML via `tomllib`,
+  braces for C-family languages. A syntactically broken edit is rejected
+  with the specific error and the file is left untouched. Validators are a
+  pluggable suffix->function registry (`validate.register_validator`), so
+  wiring in a new language doesn't mean editing the dispatch logic. See
+  [`validate.py`](janedit/validate.py).
+- **Can't leave a half-written file.** Writes go to a temp file in the same
+  directory and are moved into place with an atomic rename, so a process
+  killed mid-write can never leave a file with a mix of old and new content.
+  See `files.write`.
 - **Can't land code a reviewer rejected.** A second pass judges the change and
   a NO verdict blocks the write, even under `--auto-apply`. The reviewer sees
   before/after text rather than a unified diff, because small models misread
@@ -108,6 +118,7 @@ rewrites.
 | `/auto [on\|off]`      | auto-apply edits without confirming               |
 | `/review [on\|off]`    | toggle the self-review pass                       |
 | `/diff`, `/undo`       | inspect / revert the last applied edit            |
+| `/history`             | list every edit applied this session              |
 | `/reset`               | clear chat history (keeps todos and files)        |
 | `/help`, `/quit`       |                                                   |
 
@@ -123,6 +134,42 @@ janedit at another OpenAI-compatible API.
 Reasoning models that emit `<think>` blocks get `--max-tokens 2048`
 automatically; override if you need more.
 
+### How `RUN` flags interact with the command classifier
+
+Every `RUN` command is first classified `SAFE` / `NEEDS_APPROVAL` / `BLOCKED`
+(see [`shell.py`](janedit/shell.py)); these flags change what happens next,
+not the classification itself - a `BLOCKED` command never runs no matter
+what flags are set.
+
+| verdict         | default                        | `--auto-apply`   | `--confirm-all-commands` | `--no-run`         |
+| --------------- | ------------------------------- | ----------------- | ------------------------- | -------------------- |
+| `SAFE`          | runs immediately                | runs immediately  | asks first                 | never offered at all |
+| `NEEDS_APPROVAL`| asks first                      | runs immediately* | asks first                 | never offered at all |
+| `BLOCKED`       | refused, always                 | refused, always   | refused, always            | never offered at all |
+
+\* Commands that touch a path outside the project root are never
+auto-run - not even under `--auto-apply` - because the project root is a
+boundary the user agreed to, not something an "apply things without asking"
+flag should be able to widen.
+
+### Per-project command rules
+
+Drop `<project>/.janedit/command_rules.json` in a project to tune the
+classifier without editing source:
+
+```json
+{
+  "allow_programs": ["mvn"],
+  "deny_programs": ["ssh"],
+  "allow_subcommands": {"docker": ["build"]}
+}
+```
+
+`allow_programs`/`allow_subcommands` only add new `SAFE` entries; they can
+never re-enable something on the built-in `BLOCKED_PATTERNS` denylist (`rm
+-rf`, `sudo`, `git push`, …). `deny_programs` escalates a program that would
+otherwise be `SAFE` to `NEEDS_APPROVAL`.
+
 ## State
 
 Per project, under `<project>/.janedit/`: `session.json` (chat history + todo
@@ -135,7 +182,7 @@ queue, so sessions survive restarts) and `backups/` (pre-edit copies, used by
 .venv/bin/python -m pytest tests/ -q
 ```
 
-176 tests. The bulk of them encode failures actually observed against local
+311 tests. The bulk of them encode failures actually observed against local
 models — hallucinated transcripts, runaway `TODO ADD` loops, reviewers
 rejecting correct fixes, chat templates that reject non-alternating roles,
 edits that nest a function inside itself.

@@ -29,6 +29,7 @@ slash commands:
   /review [on|off]      toggle the model's self-review pass before edits
   /diff                 show the diff of the most recently applied edit
   /undo                 revert the most recently applied edit
+  /history              list every edit applied this session (newest first)
   /reset                clear chat history (keeps todos and files)
   /quit, /exit          leave
 anything else is sent to the model as a chat message.
@@ -210,6 +211,13 @@ def _print_status(console: Console, agent: Agent, cfg: Config, available: list[s
     table.add_row("run commands", "on" if agent.allow_run else "off")
     pending = agent.session.todos.pending_count()
     table.add_row("todo queue", f"{pending} pending" if pending else "empty")
+    total_attempts = agent.edits_applied + agent.validation_failures + agent.review_rejections
+    if total_attempts:
+        table.add_row(
+            "edit outcomes",
+            f"{agent.edits_applied} applied, {agent.validation_failures} failed validation, "
+            f"{agent.review_rejections} rejected by review",
+        )
     console.print(table)
 
 
@@ -343,6 +351,16 @@ def _handle_slash(
             target.write_text(old_text)
             console.print(f"reverted {edit['rel']}")
         session.save()
+        return False
+
+    if cmd == "/history":
+        if not session.applied_edits:
+            console.print("[dim](no edits applied yet)[/dim]")
+            return False
+        for i, edit in enumerate(reversed(session.applied_edits), start=1):
+            tag = "new file" if edit["is_new_file"] else "edit"
+            console.print(f"{i}. [{edit['time']}] {tag} {edit['rel']}")
+        console.print("[dim]/undo reverts them one at a time, most recent first.[/dim]")
         return False
 
     if cmd == "/reset":

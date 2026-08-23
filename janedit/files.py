@@ -8,8 +8,11 @@ gets printed to the model.
 
 from __future__ import annotations
 
+import contextlib
 import difflib
 import fnmatch
+import os
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -187,7 +190,23 @@ def plan_delete(root: Path, rel: str, start: int, end: int) -> EditResult:
 
 
 def write(root: Path, rel: str, new_text: str) -> Path:
+    """Write `new_text` to `rel`, atomically.
+
+    Writes to a temp file in the same directory first, then renames it over
+    the target. `os.replace` is atomic on both POSIX and Windows, so a
+    process killed mid-write (or a crash) can never leave the file half
+    written - the target either has the old content or the new content,
+    never a mix.
+    """
     path = resolve(root, rel)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(new_text)
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(new_text)
+        os.replace(tmp_name, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_name)
+        raise
     return path

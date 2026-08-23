@@ -90,6 +90,12 @@ class Agent:
         # Edits a review has already objected to once; a second, identical
         # attempt is applied rather than deadlocking on a wrong verdict.
         self._flagged_edits: set[str] = set()
+        # Rejection counters, surfaced via /status - a run where most edits
+        # get bounced by validation or review is a strong signal the chosen
+        # model isn't up to this task, and that's easy to miss turn-by-turn.
+        self.validation_failures = 0
+        self.review_rejections = 0
+        self.edits_applied = 0
 
     @property
     def code_model(self) -> str:
@@ -410,6 +416,7 @@ class Agent:
         # gives the model a precise error to fix instead of silent breakage.
         check = validate.validate(result.rel, result.new_text)
         if not check.ok:
+            self.validation_failures += 1
             self.console.print(f"[bold red]rejected (would break the file):[/bold red] {check.message}")
             return (
                 f"ERROR: that {action.kind} would leave {result.rel} invalid - {check.message}. "
@@ -451,6 +458,7 @@ class Agent:
             # nothing can ever be written.
             if edit_signature not in self._flagged_edits:
                 self._flagged_edits.add(edit_signature)
+                self.review_rejections += 1
                 self.console.print("[bold red]not applied:[/bold red] self-review rejected this change")
                 return (
                     f"Your {action.kind} to {result.rel} was REJECTED by review and NOT applied.\n"
@@ -480,6 +488,7 @@ class Agent:
         files.write(self.root, result.rel, result.new_text)
         self.session.backup_and_record(result.rel, result.old_text, result.new_text, result.is_new_file)
         self.session.save()
+        self.edits_applied += 1
         self.console.print(f"[bold green]applied[/bold green] {action.kind} -> {result.rel}")
         return f"Applied. {result.rel} now reflects the change.{review_note}", False
 

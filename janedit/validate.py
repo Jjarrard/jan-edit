@@ -15,8 +15,17 @@ from __future__ import annotations
 import ast
 import configparser
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+
+try:
+    import tomllib  # Python 3.11+
+except ImportError:  # pragma: no cover - exercised only on Python 3.10
+    try:
+        import tomli as tomllib  # type: ignore[no-redef]
+    except ImportError:  # pragma: no cover - tomli not installed
+        tomllib = None  # type: ignore[assignment]
 
 
 @dataclass
@@ -59,6 +68,19 @@ def _validate_ini(text: str) -> ValidationResult:
         configparser.ConfigParser().read_string(text)
     except configparser.Error as exc:
         return ValidationResult.bad(f"INI/config error: {exc}")
+    return ValidationResult.good()
+
+
+def _validate_toml(text: str) -> ValidationResult:
+    if tomllib is None:
+        # No TOML parser available (Python 3.10 without `tomli` installed) -
+        # fall back to the conservative INI-ish smoke test rather than
+        # skipping validation entirely.
+        return _validate_ini(text)
+    try:
+        tomllib.loads(text)
+    except tomllib.TOMLDecodeError as exc:
+        return ValidationResult.bad(f"TOML error: {exc}")
     return ValidationResult.good()
 
 
@@ -139,18 +161,28 @@ def _balanced_delimiters(text: str) -> ValidationResult:
 
 BRACKET_LANGUAGES = {".js", ".jsx", ".ts", ".tsx", ".c", ".h", ".cpp", ".hpp", ".java", ".go", ".rs", ".css"}
 
+# suffix -> validator, so a new language/tool can be wired in with one line
+# instead of editing the dispatch logic in `validate()`.
+VALIDATORS: dict[str, Callable[[str], ValidationResult]] = {".py": _validate_python, ".json": _validate_json}
+VALIDATORS.update({suffix: _validate_ini for suffix in (".ini", ".cfg")})
+VALIDATORS[".toml"] = _validate_toml
+VALIDATORS.update({suffix: _balanced_delimiters for suffix in BRACKET_LANGUAGES})
+
+
+def register_validator(suffix: str, fn: Callable[[str], ValidationResult]) -> None:
+    """Register (or override) the validator used for a given file extension.
+
+    `suffix` should include the leading dot (e.g. ".yaml"). Call this before
+    `validate()` is used to add support for a language/tool this module
+    doesn't already know about, without touching `validate()` itself.
+    """
+    VALIDATORS[suffix.lower()] = fn
+
 
 def validate(rel_path: str, text: str) -> ValidationResult:
     """Validate proposed file content by extension. Unknown types always pass."""
     suffix = Path(rel_path).suffix.lower()
-    if suffix == ".py":
-        return _validate_python(text)
-    if suffix == ".json":
-        return _validate_json(text)
-    if suffix in (".ini", ".cfg", ".toml"):
-        # TOML is close enough to INI for a smoke test; a real TOML parser
-        # would reject valid INI and vice versa, so only flag hard failures.
-        return ValidationResult.good() if suffix == ".toml" else _validate_ini(text)
-    if suffix in BRACKET_LANGUAGES:
-        return _balanced_delimiters(text)
-    return ValidationResult.good()
+    validator = VALIDATORS.get(suffix)
+    if validator is None:
+        return ValidationResult.good()
+    return validator(text)
